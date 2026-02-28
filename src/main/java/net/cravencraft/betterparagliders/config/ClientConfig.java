@@ -1,16 +1,16 @@
 package net.cravencraft.betterparagliders.config;
 
-import net.minecraftforge.common.ForgeConfigSpec;
-import net.minecraftforge.fml.ModLoadingContext;
-import net.minecraftforge.fml.config.ModConfig;
-
+import net.neoforged.neoforge.common.ModConfigSpec;
 
 public class ClientConfig {
 
-    public ClientConfig(ForgeConfigSpec.Builder client) {
+    public final ModConfigSpec spec;
+
+    public ClientConfig(ModConfigSpec.Builder client) {
         client.push("gui");
 
+
         client.pop();
-        ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, client.build());
+        this.spec = client.build();
     }
 }

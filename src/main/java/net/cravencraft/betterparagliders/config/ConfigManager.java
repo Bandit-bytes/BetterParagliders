@@ -1,16 +1,22 @@
 package net.cravencraft.betterparagliders.config;
 
-import net.minecraftforge.common.ForgeConfigSpec;
+import net.neoforged.fml.ModContainer;
+import net.neoforged.fml.config.ModConfig;
+import net.neoforged.neoforge.common.ModConfigSpec;
 
 public class ConfigManager {
-    public static ClientConfig CLIENT_CONFIG;
-    public static ServerConfig SERVER_CONFIG;
 
-    public static void registerConfigs() {
-        ForgeConfigSpec.Builder client = new ForgeConfigSpec.Builder();
-        ForgeConfigSpec.Builder server = new ForgeConfigSpec.Builder();
+    public static ClientConfig CLIENT;
+    public static ServerConfig SERVER;
 
-        CLIENT_CONFIG = new ClientConfig(client);
-        SERVER_CONFIG = new ServerConfig(server);
+    public static void register(ModContainer container) {
+        ModConfigSpec.Builder clientBuilder = new ModConfigSpec.Builder();
+        ModConfigSpec.Builder serverBuilder = new ModConfigSpec.Builder();
+
+        CLIENT = new ClientConfig(clientBuilder);
+        SERVER = new ServerConfig(serverBuilder);
+
+        container.registerConfig(ModConfig.Type.CLIENT, CLIENT.spec);
+        container.registerConfig(ModConfig.Type.SERVER, SERVER.spec);
     }
 }

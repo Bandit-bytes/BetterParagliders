@@ -1,14 +1,10 @@
 package net.cravencraft.betterparagliders.utils;
 
-import com.google.common.collect.Multimap;
 import net.bettercombat.api.AttackHand;
 import net.bettercombat.logic.PlayerAttackHelper;
-import net.cravencraft.betterparagliders.BetterParaglidersMod;
 import net.cravencraft.betterparagliders.attributes.BetterParaglidersAttributes;
-import net.cravencraft.betterparagliders.config.ServerConfig;
-import net.minecraft.world.entity.EquipmentSlot;
-import net.minecraft.world.entity.ai.attributes.Attribute;
-import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.cravencraft.betterparagliders.config.ConfigManager;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
 import tictim.paraglider.impl.movement.PlayerMovement;
@@ -23,141 +19,132 @@ public class CalculateStaminaUtils {
     public static Map<String, Double> DATAPACK_RANGED_STAMINA_OVERRIDES = new HashMap<>();
     public static Map<String, Double> DATAPACK_SHIELD_STAMINA_OVERRIDES = new HashMap<>();
 
-    public static final List<String> ADDITIONAL_STAMINA_COST_MOVEMENT_STATES = List.of("dodge", "breakfall", "roll", "vault", "climb_up", "cling_to_cliff", "vertical_wall_run", "cat_leap", "charge_jump");
+    public static final List<String> ADDITIONAL_STAMINA_COST_MOVEMENT_STATES = List.of(
+            "dodge", "breakfall", "roll", "vault", "climb_up", "cling_to_cliff",
+            "vertical_wall_run", "cat_leap", "charge_jump"
+    );
 
-    /**
-     * Populates a hashmap that will contain overrides for ranged weapons, melee weapons, and shields.
-     */
-    public static void addDatapackStaminaOverride(String type, String itemStack, double staminaCost) {
-
+    public static void addDatapackStaminaOverride(String type, String itemId, double staminaCost) {
+        // itemId should now be "namespace:path" (e.g. "minecraft:bow")
         switch (type) {
-            case "shield" -> DATAPACK_SHIELD_STAMINA_OVERRIDES.put(itemStack, staminaCost);
-            case "ranged_weapon" -> DATAPACK_RANGED_STAMINA_OVERRIDES.put(itemStack, staminaCost);
-            case "melee_weapon" -> DATAPACK_MELEE_STAMINA_OVERRIDES.put(itemStack, staminaCost);
+            case "shield" -> DATAPACK_SHIELD_STAMINA_OVERRIDES.put(itemId, staminaCost);
+            case "ranged_weapon" -> DATAPACK_RANGED_STAMINA_OVERRIDES.put(itemId, staminaCost);
+            case "melee_weapon" -> DATAPACK_MELEE_STAMINA_OVERRIDES.put(itemId, staminaCost);
         }
     }
 
-    /**
-     * Drains stamina based on the player's weapon. It's damage, tier, and reach.
-     * As well, attributes and the config can determine how much stamina is drained.
-     */
+    private static String keyOf(net.minecraft.world.item.Item item) {
+        return BuiltInRegistries.ITEM.getKey(item).toString(); // "minecraft:bow"
+    }
+
     public static int calculateMeleeStaminaCost(Player player, int currentCombo) {
-        double totalStaminaConsumption;
         AttackHand attackHand = PlayerAttackHelper.getCurrentAttack(player, currentCombo);
+        if (attackHand == null || attackHand.itemStack().isEmpty()) {
+            return 0;
+        }
+
         boolean isTwoHanded = attackHand.attributes().isTwoHanded();
-        String attackingItemId = attackHand.itemStack().getItem().getDescriptionId().replace("item.", "");
+
+        String attackingItemId = keyOf(attackHand.itemStack().getItem());
+
+        double totalStaminaConsumption;
 
         if (DATAPACK_MELEE_STAMINA_OVERRIDES.containsKey(attackingItemId)) {
-            totalStaminaConsumption = DATAPACK_MELEE_STAMINA_OVERRIDES.get(attackingItemId).intValue() * ServerConfig.meleeStaminaConsumption();
+            totalStaminaConsumption =
+                    DATAPACK_MELEE_STAMINA_OVERRIDES.get(attackingItemId)
+                            * ConfigManager.SERVER.meleeStaminaConsumption();
+        } else {
+            double playerAttackDamage = player.getAttributeValue(Attributes.ATTACK_DAMAGE);
+            double comboMultiplier = 1.0 + (currentCombo * 0.1);
 
-        }
-        else {
-            double weaponAttackDamage = 0;
-            double reachFactor = attackHand.attributes().attackRange();
-
-            Multimap<Attribute, AttributeModifier> itemStackAttributes = attackHand.itemStack().getAttributeModifiers(EquipmentSlot.MAINHAND);
-            try {
-                for (AttributeModifier attributeModifier : itemStackAttributes.get(Attributes.ATTACK_DAMAGE)) {
-                    weaponAttackDamage += attributeModifier.getAmount();
-                }
-            }
-            catch (NullPointerException e) {
-                BetterParaglidersMod.LOGGER.error("Error: {} in retrieving attack damage attributes.", e.getMessage());
-            }
-
-            totalStaminaConsumption = (weaponAttackDamage + reachFactor) * ServerConfig.meleeStaminaConsumption();
-
+            totalStaminaConsumption =
+                    playerAttackDamage * comboMultiplier
+                            * ConfigManager.SERVER.meleeStaminaConsumption();
         }
 
         if (isTwoHanded) {
-            totalStaminaConsumption = (totalStaminaConsumption * ServerConfig.twoHandedStaminaConsumption()) - player.getAttributeValue(BetterParaglidersAttributes.TWO_HANDED_STAMINA_REDUCTION.get());
-        }
-        else {
-            totalStaminaConsumption = (totalStaminaConsumption * ServerConfig.oneHandedStaminaConsumption()) - player.getAttributeValue(BetterParaglidersAttributes.ONE_HANDED_STAMINA_REDUCTION.get());
+            totalStaminaConsumption =
+                    (totalStaminaConsumption * ConfigManager.SERVER.twoHandedStaminaConsumption())
+                            - player.getAttributeValue(BetterParaglidersAttributes.TWO_HANDED_STAMINA_REDUCTION.getDelegate());
+        } else {
+            totalStaminaConsumption =
+                    (totalStaminaConsumption * ConfigManager.SERVER.oneHandedStaminaConsumption())
+                            - player.getAttributeValue(BetterParaglidersAttributes.ONE_HANDED_STAMINA_REDUCTION.getDelegate());
         }
 
-        totalStaminaConsumption -= player.getAttributeValue(BetterParaglidersAttributes.BASE_MELEE_STAMINA_REDUCTION.get());
+        totalStaminaConsumption -=
+                player.getAttributeValue(BetterParaglidersAttributes.BASE_MELEE_STAMINA_REDUCTION.getDelegate());
 
-        return (int) Math.ceil(totalStaminaConsumption);
+        int cost = (int) Math.ceil(totalStaminaConsumption);
+        return Math.max(1, cost);
     }
 
-    /**
-     * Will drain stamina based on the amount either the default configured amount for the bow being used,
-     * or based on a datapack value overriding that amount.
-     */
+    public static int calculateRangeStaminaCost(Player player, String itemIdKey) {
+        double total = ConfigManager.SERVER.rangeStaminaConsumption();
+
+        if (DATAPACK_RANGED_STAMINA_OVERRIDES.containsKey(itemIdKey)) {
+            total += DATAPACK_RANGED_STAMINA_OVERRIDES.get(itemIdKey);
+        }
+
+        int cost = (int) Math.ceil(total - player.getAttributeValue(BetterParaglidersAttributes.RANGE_STAMINA_REDUCTION.getDelegate()));
+        return Math.max(1, cost);
+    }
+
     public static int calculateRangeStaminaCost(Player player) {
-        double totalStaminaConsumption = ServerConfig.rangeStaminaConsumption();
-        String bowItem = player.getUseItem().getItem().getDescriptionId().replace("item.", "");
-
-        if (DATAPACK_RANGED_STAMINA_OVERRIDES.containsKey(bowItem)) {
-            totalStaminaConsumption += DATAPACK_RANGED_STAMINA_OVERRIDES.get(bowItem).intValue();
-        }
-
-        return (int) (totalStaminaConsumption - player.getAttributeValue(BetterParaglidersAttributes.RANGE_STAMINA_REDUCTION.get()));
+        String bowItemKey = keyOf(player.getUseItem().getItem());
+        return calculateRangeStaminaCost(player, bowItemKey);
     }
 
-    /**
-     * Will drain stamina based on the amount either the default configured amount for the shield being used,
-     * or based on a datapack value overriding that amount.
-     */
     public static int calculateBlockStaminaCost(Player player, float blockedDamage) {
-        int totalStaminaConsumption = (int) (ServerConfig.blockStaminaConsumption() + blockedDamage);
-        String shieldItem = player.getUseItem().getItem().getDescriptionId().replace("item.", "");
+        double total = ConfigManager.SERVER.blockStaminaConsumption() + blockedDamage;
 
-        if (DATAPACK_SHIELD_STAMINA_OVERRIDES.containsKey(shieldItem)) {
-            totalStaminaConsumption += DATAPACK_SHIELD_STAMINA_OVERRIDES.get(shieldItem).intValue();
+        String shieldItemKey = keyOf(player.getUseItem().getItem());
+
+        if (DATAPACK_SHIELD_STAMINA_OVERRIDES.containsKey(shieldItemKey)) {
+            total += DATAPACK_SHIELD_STAMINA_OVERRIDES.get(shieldItemKey);
         }
 
-        return Math.round((float)(totalStaminaConsumption - player.getAttributeValue(BetterParaglidersAttributes.BLOCK_STAMINA_REDUCTION.get())));
+        total -= player.getAttributeValue(BetterParaglidersAttributes.BLOCK_STAMINA_REDUCTION.getDelegate());
+        int cost = (int) Math.ceil(total);
+        return Math.max(1, cost);
     }
 
-    /**
-     * Modifies the stamina drain for the current states below based on the attribute values
-     * for the given player.
-     *
-     * @return The amount of stamina that should be drained for the given state based on the player's current attributes.
-     */
-    public static int getModifiedStateChange(PlayerMovement playerMovement) {
-        int originalStaminaDelta = playerMovement.getActualStaminaDelta();
-        Player player = playerMovement.player();
-        String playerState = playerMovement.state().id().getPath();
+    public static double getModifiedStateChange(PlayerMovement playerMovement) {
+        double original = playerMovement.staminaDelta();
 
-        int modifiedStaminaDelta = (int) switch(playerState) {
-            case "idle" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.IDLE_STAMINA_REGEN.get());
-            case "running" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.SPRINTING_STAMINA_REDUCTION.get());
-            case "swimming" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.SWIMMING_STAMINA_REDUCTION.get());
-            case "underwater" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.SUBMERGED_STAMINA_REGEN.get());
-            case "breathing_underwater" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.WATER_BREATHING_STAMINA_REGEN.get());
-            case "fast_running" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.FAST_RUNNING_STAMINA_REDUCTION.get());
-            case "fast_swimming" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.FAST_SWIMMING_STAMINA_REDUCTION.get());
-            case "horizontal_wall_run" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.HORIZONTAL_WALL_RUN_STAMINA_REDUCTION.get());
-            case "cling_to_cliff" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.CLING_TO_CLIFF_STAMINA_REDUCTION.get());
-            case "dodge" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.DODGE_STAMINA_REDUCTION.get());
-            case "roll" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.ROLL_STAMINA_REDUCTION.get());
-            case "climb_up" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.CLIMB_UP_STAMINA_REDUCTION.get());
-            case "breakfall" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.BREAKFALL_STAMINA_REDUCTION.get());
-            case "vault" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.VAULT_STAMINA_REDUCTION.get());
-            case "vertical_wall_run" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.VERTICAL_WALL_RUN_STAMINA_REDUCTION.get());
-            case "cat_leap" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.CAT_LEAP_STAMINA_REDUCTION.get());
-            case "charge_jump" -> originalStaminaDelta + player.getAttributeValue(BetterParaglidersAttributes.CHARGE_JUMP_STAMINA_REDUCTION.get());
-            default -> originalStaminaDelta;
+        Player player = playerMovement.player();
+        String state = playerMovement.state().id().getPath();
+
+        double modified = switch (state) {
+            case "idle" -> original + player.getAttributeValue(BetterParaglidersAttributes.IDLE_STAMINA_REGEN.getDelegate());
+            case "running" -> original + player.getAttributeValue(BetterParaglidersAttributes.SPRINTING_STAMINA_REDUCTION.getDelegate());
+            case "swimming" -> original + player.getAttributeValue(BetterParaglidersAttributes.SWIMMING_STAMINA_REDUCTION.getDelegate());
+            case "underwater" -> original + player.getAttributeValue(BetterParaglidersAttributes.SUBMERGED_STAMINA_REGEN.getDelegate());
+            case "breathing_underwater" -> original + player.getAttributeValue(BetterParaglidersAttributes.WATER_BREATHING_STAMINA_REGEN.getDelegate());
+
+            case "fast_running" -> original + player.getAttributeValue(BetterParaglidersAttributes.FAST_RUNNING_STAMINA_REDUCTION.getDelegate());
+            case "fast_swimming" -> original + player.getAttributeValue(BetterParaglidersAttributes.FAST_SWIMMING_STAMINA_REDUCTION.getDelegate());
+            case "horizontal_wall_run" -> original + player.getAttributeValue(BetterParaglidersAttributes.HORIZONTAL_WALL_RUN_STAMINA_REDUCTION.getDelegate());
+            case "cling_to_cliff" -> original + player.getAttributeValue(BetterParaglidersAttributes.CLING_TO_CLIFF_STAMINA_REDUCTION.getDelegate());
+            case "dodge" -> original + player.getAttributeValue(BetterParaglidersAttributes.DODGE_STAMINA_REDUCTION.getDelegate());
+            case "roll" -> original + player.getAttributeValue(BetterParaglidersAttributes.ROLL_STAMINA_REDUCTION.getDelegate());
+            case "climb_up" -> original + player.getAttributeValue(BetterParaglidersAttributes.CLIMB_UP_STAMINA_REDUCTION.getDelegate());
+            case "breakfall" -> original + player.getAttributeValue(BetterParaglidersAttributes.BREAKFALL_STAMINA_REDUCTION.getDelegate());
+            case "vault" -> original + player.getAttributeValue(BetterParaglidersAttributes.VAULT_STAMINA_REDUCTION.getDelegate());
+            case "vertical_wall_run" -> original + player.getAttributeValue(BetterParaglidersAttributes.VERTICAL_WALL_RUN_STAMINA_REDUCTION.getDelegate());
+            case "cat_leap" -> original + player.getAttributeValue(BetterParaglidersAttributes.CAT_LEAP_STAMINA_REDUCTION.getDelegate());
+            case "charge_jump" -> original + player.getAttributeValue(BetterParaglidersAttributes.CHARGE_JUMP_STAMINA_REDUCTION.getDelegate());
+
+            default -> original;
         };
 
-        // Ensure that attributes can never make a player state that isn't supposed to give stamina give it.
-        if (originalStaminaDelta >= 0) {
-            return Math.max(modifiedStaminaDelta, originalStaminaDelta);
-        }
-        else {
-            return Math.min(0, modifiedStaminaDelta);
+        if (original >= 0.0) {
+            return Math.max(modified, original);
+        } else {
+            return Math.min(0.0, modified);
         }
     }
 
-    /**
-     * Method mainly made to better support the ParCool mod and its various mobility actions.
-     *
-     * @param playerState The state that will be searched for in the list of additional movement states
-     * @return whether the state is contained in the list
-     */
     public static boolean getAdditionalMovementStaminaCost(String playerState) {
         return ADDITIONAL_STAMINA_COST_MOVEMENT_STATES.contains(playerState);
     }

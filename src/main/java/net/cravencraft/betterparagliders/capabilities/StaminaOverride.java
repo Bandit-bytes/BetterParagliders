@@ -1,11 +1,14 @@
 package net.cravencraft.betterparagliders.capabilities;
 
 public interface StaminaOverride {
-    /**
-     * Interface for ServerBotWStaminaMixin and BotWStaminaMixin
-     */
-    void calculateMeleeStaminaCostServerSide(int comboCount);
-    void calculateBlockStaminaCostServerSide(float blockedAmount);
-    int getTotalActionStaminaCost();
-    void setTotalActionStaminaCost(int totalActionStaminaCost);
+
+    int getRegenDelayTicks();
+    void setRegenDelayTicks(int ticks);
+
+    default void addRegenDelay(int ticks) {
+        setRegenDelayTicks(Math.max(getRegenDelayTicks(), ticks));
+    }
+
+    default int getTotalActionStaminaCost() { return 0; }
+    default void setTotalActionStaminaCost(int totalActionStaminaCost) {}
 }
