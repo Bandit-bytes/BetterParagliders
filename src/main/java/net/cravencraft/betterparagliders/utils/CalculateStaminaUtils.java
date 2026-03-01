@@ -25,7 +25,6 @@ public class CalculateStaminaUtils {
     );
 
     public static void addDatapackStaminaOverride(String type, String itemId, double staminaCost) {
-        // itemId should now be "namespace:path" (e.g. "minecraft:bow")
         switch (type) {
             case "shield" -> DATAPACK_SHIELD_STAMINA_OVERRIDES.put(itemId, staminaCost);
             case "ranged_weapon" -> DATAPACK_RANGED_STAMINA_OVERRIDES.put(itemId, staminaCost);
@@ -34,31 +33,29 @@ public class CalculateStaminaUtils {
     }
 
     private static String keyOf(net.minecraft.world.item.Item item) {
-        return BuiltInRegistries.ITEM.getKey(item).toString(); // "minecraft:bow"
+        return BuiltInRegistries.ITEM.getKey(item).toString();
     }
 
     public static int calculateMeleeStaminaCost(Player player, int currentCombo) {
         AttackHand attackHand = PlayerAttackHelper.getCurrentAttack(player, currentCombo);
-        if (attackHand == null || attackHand.itemStack().isEmpty()) {
-            return 0;
-        }
+        boolean hasHand = attackHand != null && !attackHand.itemStack().isEmpty();
 
-        boolean isTwoHanded = attackHand.attributes().isTwoHanded();
-
-        String attackingItemId = keyOf(attackHand.itemStack().getItem());
+        boolean isTwoHanded = hasHand && attackHand.attributes().isTwoHanded();
+        String attackingItemId = hasHand ? keyOf(attackHand.itemStack().getItem()) : "minecraft:air";
 
         double totalStaminaConsumption;
-
-        if (DATAPACK_MELEE_STAMINA_OVERRIDES.containsKey(attackingItemId)) {
+        if (hasHand && DATAPACK_MELEE_STAMINA_OVERRIDES.containsKey(attackingItemId)) {
             totalStaminaConsumption =
                     DATAPACK_MELEE_STAMINA_OVERRIDES.get(attackingItemId)
                             * ConfigManager.SERVER.meleeStaminaConsumption();
         } else {
+            double baseMelee = 4.0;
+            double comboMultiplier = 1.0 + (currentCombo * 0.15);
             double playerAttackDamage = player.getAttributeValue(Attributes.ATTACK_DAMAGE);
-            double comboMultiplier = 1.0 + (currentCombo * 0.1);
+            double damageBonus = Math.max(0.0, playerAttackDamage - 1.0) * 0.6;
 
             totalStaminaConsumption =
-                    playerAttackDamage * comboMultiplier
+                    (baseMelee * comboMultiplier + damageBonus)
                             * ConfigManager.SERVER.meleeStaminaConsumption();
         }
 

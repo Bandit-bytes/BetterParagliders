@@ -7,14 +7,19 @@ import com.google.gson.JsonParser;
 import com.google.gson.stream.JsonReader;
 import net.bettercombat.logic.PlayerAttackProperties;
 import net.cravencraft.betterparagliders.BetterParaglidersMod;
+import net.cravencraft.betterparagliders.capabilities.StaminaOverride;
 import net.cravencraft.betterparagliders.config.ConfigManager;
 import net.cravencraft.betterparagliders.mixins.paragliders.accessors.PlayerMovementAccessor;
 import net.cravencraft.betterparagliders.utils.CalculateStaminaUtils;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.item.BowItem;
 import net.minecraft.world.item.CrossbowItem;
@@ -40,6 +45,9 @@ import java.util.Map;
 public final class BetterParaglidersEventHandler {
 
     private BetterParaglidersEventHandler() {}
+
+    private static final String TAG_LAST_MELEE_DRAIN_TICK = "betterparagliders_last_melee_drain_tick";
+
 
     private static Stamina getStamina(ServerPlayer player) {
         PlayerMovement movement = PlayerMovementProvider.of(player);
@@ -251,28 +259,43 @@ public final class BetterParaglidersEventHandler {
     }
 
     @SubscribeEvent(priority = EventPriority.HIGHEST)
-    public static void drainOnMeleeDamage(LivingIncomingDamageEvent event) {
-        if (!(event.getSource().getEntity() instanceof ServerPlayer player)) return;
-        if (player.level().isClientSide()) return;
+    public static void drainOnMeleeDamage_Pre(LivingDamageEvent.Pre event) {
+        LivingEntity victim = event.getEntity();
+        if (victim.level().isClientSide()) return;
+
+        DamageSource source = event.getSource();
+
+        Entity srcEntity = source.getEntity();
+        ServerPlayer player = (srcEntity instanceof ServerPlayer sp) ? sp
+                : (source.getDirectEntity() instanceof ServerPlayer sp2) ? sp2
+                : null;
+
+        if (player == null) return;
         if (player.isCreative() || player.isSpectator()) return;
 
-        if (event.getSource().getDirectEntity() instanceof Projectile) return;
+        if (source.getDirectEntity() instanceof Projectile) return;
 
         Stamina stamina = getStamina(player);
         if (stamina == null) return;
 
+        CompoundTag data = player.getPersistentData();
+        int now = player.tickCount;
+        if (data.getInt(TAG_LAST_MELEE_DRAIN_TICK) == now) return;
+        data.putInt(TAG_LAST_MELEE_DRAIN_TICK, now);
+
         if (stamina.isDepleted()) {
-            event.setCanceled(true);
+            event.setNewDamage(0F);
             return;
         }
 
         int combo = (player instanceof PlayerAttackProperties props) ? props.getComboCount() : 0;
-
         int cost = Math.max(1, CalculateStaminaUtils.calculateMeleeStaminaCost(player, combo));
+
         drain(stamina, cost);
+        addDelay(stamina, 40);
     }
     private static void addDelay(Stamina stamina, int ticks) {
-        if (stamina instanceof net.cravencraft.betterparagliders.capabilities.StaminaOverride ov) {
+        if (stamina instanceof StaminaOverride ov) {
             ov.addRegenDelay(ticks);
         }
     }

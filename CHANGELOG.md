@@ -1,3 +1,9 @@
+## V1.0.1-neo
+- Fixed Melee Damage to apply to the stamina drain
+
+## V1.0.0-neo 
+- Ported mod to NeoForge 1.21.1
+
 ## V0.6.0 - Major Bug Fixes, Datapack Rework, Depletion Effects Rework, & ParCool Support
 - Removed support for additional effects when the player runs out of stamina which was causing bugs where
   the player couldn't receive those effects when they had stamina. 
