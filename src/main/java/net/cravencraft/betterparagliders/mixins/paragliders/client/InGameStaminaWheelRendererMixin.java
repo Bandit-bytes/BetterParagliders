@@ -1,7 +1,6 @@
 package net.cravencraft.betterparagliders.mixins.paragliders.client;
 
 import net.cravencraft.betterparagliders.utils.CalculateStaminaUtils;
-import net.minecraft.world.entity.player.Player;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -22,16 +21,9 @@ public abstract class InGameStaminaWheelRendererMixin {
     )
     private double betterparagliders$overrideStaminaDelta(Movement movement) {
         if (!(movement instanceof PlayerMovement pm)) {
-            return 0.0;
+            return movement.staminaDelta();
         }
 
-        Player player = pm.player();
-
-        double staminaDelta = CalculateStaminaUtils.getModifiedStateChange(pm);
-        if (CalculateStaminaUtils.getAdditionalMovementStaminaCost(pm.state().id().getPath())) {
-            staminaDelta = 0.0;
-        }
-
-        return staminaDelta;
+        return CalculateStaminaUtils.getModifiedStateChange(pm);
     }
 }

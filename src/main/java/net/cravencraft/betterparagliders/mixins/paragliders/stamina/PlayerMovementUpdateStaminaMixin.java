@@ -17,7 +17,6 @@ import tictim.paraglider.impl.movement.PlayerMovement;
 @Mixin(PlayerMovement.class)
 public abstract class PlayerMovementUpdateStaminaMixin {
 
-    @Shadow public abstract PlayerState state();
     @Shadow public abstract Stamina stamina();
     @Shadow public abstract Player player();
 
@@ -31,10 +30,6 @@ public abstract class PlayerMovementUpdateStaminaMixin {
     )
     private double betterparagliders$overrideDelta(PlayerMovement instance) {
         double staminaDelta = CalculateStaminaUtils.getModifiedStateChange(instance);
-
-        if (CalculateStaminaUtils.getAdditionalMovementStaminaCost(this.state().id().getPath())) {
-            staminaDelta = 0.0D;
-        }
 
         Player p = this.player();
         if (p != null && p.isUsingItem()) {
