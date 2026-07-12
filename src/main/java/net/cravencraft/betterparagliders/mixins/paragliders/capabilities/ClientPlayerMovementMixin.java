@@ -29,7 +29,7 @@ public abstract class ClientPlayerMovementMixin {
         if (p == null) return;
 
         Stamina stamina = Stamina.get(p);
-        if (!p.isCreative() && !p.isSpectator() && stamina.isDepleted()) {
+        if (!p.isCreative() && !p.isSpectator() && stamina != null && stamina.isDepleted()) {
             ((MinecraftClient_BetterCombat) Minecraft.getInstance()).cancelUpswing();
             return;
         }

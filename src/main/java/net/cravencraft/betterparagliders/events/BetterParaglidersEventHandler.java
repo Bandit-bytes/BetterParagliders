@@ -5,70 +5,78 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.stream.JsonReader;
-import net.bettercombat.logic.PlayerAttackProperties;
 import net.cravencraft.betterparagliders.BetterParaglidersMod;
 import net.cravencraft.betterparagliders.capabilities.StaminaOverride;
 import net.cravencraft.betterparagliders.config.ConfigManager;
 import net.cravencraft.betterparagliders.mixins.paragliders.accessors.PlayerMovementAccessor;
 import net.cravencraft.betterparagliders.utils.CalculateStaminaUtils;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
+import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.item.BowItem;
 import net.minecraft.world.item.CrossbowItem;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ShieldItem;
-import net.minecraft.world.phys.EntityHitResult;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.event.entity.ProjectileImpactEvent;
+import net.neoforged.neoforge.event.AddReloadListenerEvent;
 import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
 import net.neoforged.neoforge.event.entity.living.LivingEntityUseItemEvent;
-import net.neoforged.neoforge.event.entity.living.LivingIncomingDamageEvent;
 import net.neoforged.neoforge.event.entity.player.AttackEntityEvent;
-import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import tictim.paraglider.api.stamina.Stamina;
 import tictim.paraglider.impl.movement.PlayerMovement;
 
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.WeakHashMap;
 
 @EventBusSubscriber(modid = BetterParaglidersMod.MOD_ID, bus = EventBusSubscriber.Bus.GAME)
 public final class BetterParaglidersEventHandler {
 
+    private static final Map<ServerPlayer, MeleeActionState> MELEE_ACTIONS = new WeakHashMap<>();
+    private static final int MELEE_HIT_GRACE_TICKS = 20;
+    private static final int RANGED_DRAIN_INTERVAL_TICKS = 2;
+
     private BetterParaglidersEventHandler() {}
-
-    private static final String TAG_LAST_MELEE_DRAIN_TICK = "betterparagliders_last_melee_drain_tick";
-
 
     private static Stamina getStamina(ServerPlayer player) {
         PlayerMovement movement = PlayerMovementProvider.of(player);
         if (movement instanceof PlayerMovementAccessor accessor) {
-            Stamina s = accessor.betterparagliders$getStamina();
-            if (s != null) return s;
+            Stamina stamina = accessor.betterparagliders$getStamina();
+            if (stamina != null) return stamina;
         }
         return Stamina.get(player);
     }
 
-    private static double drain(Stamina stamina, double amount) {
-        return stamina.takeStamina(amount, false, false, true, true, false);
+    private static void drain(Stamina stamina, double amount) {
+        if (amount > 0.0D) {
+            stamina.takeStamina(amount, false, false, true, true, false);
+        }
     }
 
-    private static String normalizeToRegistryId(String namespace, String rawName) {
-        if (rawName.contains(":")) return rawName;
-        return namespace + ":" + rawName;
+    private static String registryKey(Item item) {
+        return BuiltInRegistries.ITEM.getKey(item).toString();
     }
 
-    private static String registryKey(net.minecraft.world.item.Item item) {
-        return BuiltInRegistries.ITEM.getKey(item).toString(); // "minecraft:bow"
+    private static boolean isRangedItem(Item item) {
+        return item instanceof BowItem
+                || item instanceof CrossbowItem
+                || CalculateStaminaUtils.DATAPACK_RANGED_STAMINA_OVERRIDES.containsKey(registryKey(item));
+    }
+
+    private static boolean isShieldItem(Item item) {
+        return item instanceof ShieldItem
+                || CalculateStaminaUtils.DATAPACK_SHIELD_STAMINA_OVERRIDES.containsKey(registryKey(item));
     }
 
     private static boolean isDepleted(ServerPlayer player) {
@@ -78,225 +86,239 @@ public final class BetterParaglidersEventHandler {
     }
 
     @SubscribeEvent
-    public static void loadStaminaOverrides(ServerStartedEvent event) {
-        ResourceManager resourceManager = event.getServer().getResourceManager();
+    public static void registerReloadListener(AddReloadListenerEvent event) {
+        event.addListener((ResourceManagerReloadListener) BetterParaglidersEventHandler::loadStaminaOverrides);
+    }
+
+    private static void loadStaminaOverrides(ResourceManager resourceManager) {
+        CalculateStaminaUtils.clearDatapackStaminaOverrides();
 
         var found = resourceManager.listResourceStacks(
                 "stamina_cost",
-                (fileName) -> fileName.getPath().endsWith(".json")
+                fileName -> fileName.getPath().endsWith(".json")
         );
 
-        BetterParaglidersMod.LOGGER.info("[BetterParagliders] Found stamina_cost jsons: {}", found.keySet());
+        BetterParaglidersMod.LOGGER.info("[BetterParagliders] Reloading stamina_cost JSONs: {}", found.keySet());
 
         for (Map.Entry<ResourceLocation, List<Resource>> entry : found.entrySet()) {
             String namespace = entry.getKey().getNamespace();
 
             for (Resource resource : entry.getValue()) {
-                try (JsonReader reader = new JsonReader(new InputStreamReader(resource.open()))) {
-                    JsonArray items = JsonParser.parseReader(reader).getAsJsonArray();
-
-                    for (JsonElement el : items) {
-                        if (!el.isJsonObject()) continue;
-                        JsonObject obj = el.getAsJsonObject();
-
-                        if (!obj.has("type") || !obj.has("name") || !obj.has("stamina_cost")) continue;
-
-                        String type = obj.get("type").getAsString();
-                        String rawName = obj.get("name").getAsString();
-                        double cost = obj.get("stamina_cost").getAsDouble();
-
-                        String key = normalizeToRegistryId(namespace, rawName);
-                        CalculateStaminaUtils.addDatapackStaminaOverride(type, key, cost);
-
-                        BetterParaglidersMod.LOGGER.info("[BetterParagliders] Loaded stamina override: {} {} -> {}", type, key, cost);
+                try (JsonReader reader = new JsonReader(new InputStreamReader(resource.open(), StandardCharsets.UTF_8))) {
+                    JsonElement root = JsonParser.parseReader(reader);
+                    if (!root.isJsonArray()) {
+                        BetterParaglidersMod.LOGGER.warn("[BetterParagliders] {} must contain a JSON array", entry.getKey());
+                        continue;
                     }
-                } catch (Exception e) {
-                    BetterParaglidersMod.LOGGER.error("[BetterParagliders] Bad JSON in {}", entry.getKey(), e);
+
+                    JsonArray items = root.getAsJsonArray();
+                    for (JsonElement element : items) {
+                        if (!element.isJsonObject()) continue;
+                        JsonObject object = element.getAsJsonObject();
+
+                        if (!object.has("type") || !object.has("name") || !object.has("stamina_cost")) {
+                            BetterParaglidersMod.LOGGER.warn("[BetterParagliders] Skipping incomplete stamina entry in {}: {}", entry.getKey(), object);
+                            continue;
+                        }
+
+                        String type = object.get("type").getAsString();
+                        String rawName = object.get("name").getAsString();
+                        double cost = object.get("stamina_cost").getAsDouble();
+                        String fullName = rawName.contains(":") ? rawName : namespace + ":" + rawName;
+                        ResourceLocation itemId = ResourceLocation.tryParse(fullName);
+
+                        if (itemId == null) {
+                            BetterParaglidersMod.LOGGER.warn("[BetterParagliders] Invalid item id '{}' in {}", fullName, entry.getKey());
+                            continue;
+                        }
+
+                        if (!BuiltInRegistries.ITEM.containsKey(itemId)) {
+                            BetterParaglidersMod.LOGGER.warn("[BetterParagliders] Unknown item id '{}' in {}", itemId, entry.getKey());
+                            continue;
+                        }
+
+                        if (!CalculateStaminaUtils.addDatapackStaminaOverride(type, itemId.toString(), cost)) {
+                            BetterParaglidersMod.LOGGER.warn("[BetterParagliders] Invalid stamina override in {}: type='{}', item='{}', cost={}", entry.getKey(), type, itemId, cost);
+                            continue;
+                        }
+
+                        BetterParaglidersMod.LOGGER.info("[BetterParagliders] Loaded stamina override: {} {} -> {}", type, itemId, cost);
+                    }
+                } catch (Exception exception) {
+                    BetterParaglidersMod.LOGGER.error("[BetterParagliders] Failed to read {}", entry.getKey(), exception);
                 }
             }
         }
     }
 
+    /** Called by the validated play-to-server packet when Better Combat starts a new combo step. */
+    public static void handleMeleeSwingPacket(ServerPlayer player, int comboFromClient) {
+        if (player.isCreative() || player.isSpectator() || comboFromClient <= 0) return;
+
+        Stamina stamina = getStamina(player);
+        if (stamina == null) return;
+
+        int combo = Math.min(comboFromClient, 32);
+        long now = player.level().getGameTime();
+        MeleeActionState actionState = MELEE_ACTIONS.computeIfAbsent(player, ignored -> new MeleeActionState());
+
+        if (actionState.lastActionTick == now && actionState.lastCombo == combo) {
+            return;
+        }
+
+        actionState.lastActionTick = now;
+        actionState.lastCombo = combo;
+
+        if (stamina.isDepleted()) {
+            actionState.paidUntil = Long.MIN_VALUE;
+            return;
+        }
+
+        int cost = CalculateStaminaUtils.calculateMeleeStaminaCost(player, combo);
+        if (cost > 0) {
+            drain(stamina, cost);
+            addDelay(stamina, ConfigManager.SERVER.meleeRegenDelayTicks());
+        }
+
+        // A paid attack is allowed to land even if paying its cost reduced stamina to zero.
+        actionState.paidUntil = now + MELEE_HIT_GRACE_TICKS;
+    }
+
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void shieldBlockEvent(LivingDamageEvent.Post event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
-        if (player.level().isClientSide()) return;
-        if (player.isCreative() || player.isSpectator()) return;
-
-        drainShieldBlock(player, event.getBlockedDamage());
-    }
-
-    @SubscribeEvent(priority = EventPriority.HIGHEST)
-    public static void shieldBlockProjectileEvent(ProjectileImpactEvent event) {
-        if (!(event.getRayTraceResult() instanceof EntityHitResult hit)) return;
-        if (!(hit.getEntity() instanceof ServerPlayer player)) return;
-        if (player.level().isClientSide()) return;
-        if (player.isCreative() || player.isSpectator()) return;
-
-        drainShieldBlock(player, (float) ConfigManager.SERVER.blockProjectileStaminaConsumption());
-    }
-
-    private static void drainShieldBlock(ServerPlayer player, float blockedAmount) {
-        if (!player.isUsingItem()) return;
-        if (!(player.getUseItem().getItem() instanceof ShieldItem)) return;
+        if (player.level().isClientSide() || player.isCreative() || player.isSpectator()) return;
+        if (event.getBlockedDamage() <= 0.0F || !player.isUsingItem()) return;
+        if (!isShieldItem(player.getUseItem().getItem())) return;
 
         Stamina stamina = getStamina(player);
         if (stamina == null || stamina.isDepleted()) return;
 
-        int cost = Math.max(1, CalculateStaminaUtils.calculateBlockStaminaCost(player, blockedAmount));
-        drain(stamina, cost);
+        double projectileSurcharge = event.getSource().getDirectEntity() instanceof Projectile
+                ? ConfigManager.SERVER.blockProjectileStaminaConsumption()
+                : 0.0D;
 
-        addDelay(stamina, 10);
+        int cost = CalculateStaminaUtils.calculateBlockStaminaCost(
+                player,
+                event.getBlockedDamage(),
+                projectileSurcharge
+        );
+
+        if (cost > 0) {
+            drain(stamina, cost);
+            addDelay(stamina, ConfigManager.SERVER.blockRegenDelayTicks());
+        }
+
+        if (stamina.isDepleted()) {
+            player.stopUsingItem();
+        }
     }
-
 
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void cancelAttackIfDepleted(AttackEntityEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
-        if (player.level().isClientSide()) return;
-        if (player.isCreative() || player.isSpectator()) return;
+        if (player.level().isClientSide() || player.isCreative() || player.isSpectator()) return;
+        if (!isDepleted(player)) return;
 
-        Stamina stamina = getStamina(player);
-        if (stamina != null && stamina.isDepleted()) event.setCanceled(true);
+        MeleeActionState actionState = MELEE_ACTIONS.get(player);
+        long paidUntil = actionState == null ? Long.MIN_VALUE : actionState.paidUntil;
+        if (player.level().getGameTime() > paidUntil) {
+            event.setCanceled(true);
+        }
     }
 
     @SubscribeEvent
-    public static void bowDrawDrain(LivingEntityUseItemEvent.Tick event) {
+    public static void rangedDrawDrain(LivingEntityUseItemEvent.Tick event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
-        if (player.level().isClientSide()) return;
-        if (player.isCreative() || player.isSpectator()) return;
+        if (player.level().isClientSide() || player.isCreative() || player.isSpectator()) return;
 
-        var stack = event.getItem();
-        var item = stack.getItem();
-
-        boolean bowLike = item instanceof BowItem || item instanceof CrossbowItem;
-        String key = registryKey(item);
-        boolean overridden = CalculateStaminaUtils.DATAPACK_RANGED_STAMINA_OVERRIDES.containsKey(key);
-        if (!bowLike && !overridden) return;
+        Item item = event.getItem().getItem();
+        if (!isRangedItem(item)) return;
 
         Stamina stamina = getStamina(player);
         if (stamina == null) return;
 
         if (stamina.isDepleted()) {
-            player.stopUsingItem();
+            if (!(item instanceof CrossbowItem) || !CrossbowItem.isCharged(event.getItem())) {
+                player.stopUsingItem();
+            }
             return;
         }
 
-        double perSecond = ConfigManager.SERVER.rangeStaminaConsumption();
+        double staminaPerSecond = CalculateStaminaUtils.calculateRangeStaminaPerSecond(player, registryKey(item));
+        if (staminaPerSecond <= 0.0D) return;
 
-        if (overridden) {
-            perSecond += CalculateStaminaUtils.DATAPACK_RANGED_STAMINA_OVERRIDES.get(key);
-        }
+        addDelay(stamina, Math.max(ConfigManager.SERVER.rangedRegenDelayTicks(), RANGED_DRAIN_INTERVAL_TICKS + 1));
 
-        perSecond -= player.getAttributeValue(
-                net.cravencraft.betterparagliders.attributes.BetterParaglidersAttributes
-                        .RANGE_STAMINA_REDUCTION.getDelegate()
-        );
+        if ((player.tickCount % RANGED_DRAIN_INTERVAL_TICKS) == 0) {
+            drain(stamina, staminaPerSecond * RANGED_DRAIN_INTERVAL_TICKS / 20.0D);
 
-        if (perSecond < 0.0) perSecond = 0.0;
-
-        final double HOLD_SCALE = 10.0;
-        perSecond *= HOLD_SCALE;
-
-        final int intervalTicks = 2;
-
-        addDelay(stamina, intervalTicks + 2);
-
-        if ((player.tickCount % intervalTicks) == 0) {
-            double amount = (perSecond / 20.0) * intervalTicks;
-
-            if (amount > 0.0) {
-                drain(stamina, amount);
+            if (stamina.isDepleted() && (!(item instanceof CrossbowItem) || !CrossbowItem.isCharged(event.getItem()))) {
+                player.stopUsingItem();
             }
-
-            addDelay(stamina, intervalTicks + 4);
         }
     }
+
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onRangedRelease(LivingEntityUseItemEvent.Stop event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
-        if (player.level().isClientSide()) return;
-        if (player.isCreative() || player.isSpectator()) return;
-
-        var stack = event.getItem();
-        var item = stack.getItem();
-
-        boolean bowLike = item instanceof BowItem || item instanceof CrossbowItem;
-        String key = registryKey(item);
-        boolean overridden = CalculateStaminaUtils.DATAPACK_RANGED_STAMINA_OVERRIDES.containsKey(key);
-        if (!bowLike && !overridden) return;
-
-        int timeUsed = stack.getUseDuration(player) - event.getDuration();
-        if (timeUsed < 5) return;
+        if (player.level().isClientSide() || player.isCreative() || player.isSpectator()) return;
+        if (!isRangedItem(event.getItem().getItem())) return;
 
         Stamina stamina = getStamina(player);
-        if (stamina == null) return;
-
-        addDelay(stamina, 10);
+        if (stamina != null) {
+            addDelay(stamina, ConfigManager.SERVER.rangedRegenDelayTicks());
+        }
     }
+
     @SubscribeEvent
     public static void cancelUseItemsRequiringStamina(LivingEntityUseItemEvent.Tick event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
-        if (player.level().isClientSide()) return;
-        if (!isDepleted(player)) return;
+        if (player.level().isClientSide() || !isDepleted(player)) return;
 
-        var item = event.getItem().getItem();
-        String key = registryKey(item);
-
-        boolean ranged = item instanceof BowItem
-                || item instanceof CrossbowItem
-                || CalculateStaminaUtils.DATAPACK_RANGED_STAMINA_OVERRIDES.containsKey(key);
-
-        boolean shield = item instanceof ShieldItem
-                || CalculateStaminaUtils.DATAPACK_SHIELD_STAMINA_OVERRIDES.containsKey(key);
-
-        if (ranged) {
+        Item item = event.getItem().getItem();
+        if (isRangedItem(item)) {
             if (item instanceof CrossbowItem && CrossbowItem.isCharged(event.getItem())) return;
             player.stopUsingItem();
-        } else if (shield) {
+        } else if (isShieldItem(item)) {
             player.stopUsingItem();
         }
     }
 
     @SubscribeEvent(priority = EventPriority.HIGHEST)
-    public static void drainOnMeleeDamage_Pre(LivingDamageEvent.Pre event) {
+    public static void preventUnpaidMeleeDamage(LivingDamageEvent.Pre event) {
         LivingEntity victim = event.getEntity();
         if (victim.level().isClientSide()) return;
 
         DamageSource source = event.getSource();
-
-        Entity srcEntity = source.getEntity();
-        ServerPlayer player = (srcEntity instanceof ServerPlayer sp) ? sp
-                : (source.getDirectEntity() instanceof ServerPlayer sp2) ? sp2
-                : null;
-
-        if (player == null) return;
-        if (player.isCreative() || player.isSpectator()) return;
-
         if (source.getDirectEntity() instanceof Projectile) return;
 
+        Entity sourceEntity = source.getEntity();
+        ServerPlayer player = sourceEntity instanceof ServerPlayer serverPlayer
+                ? serverPlayer
+                : source.getDirectEntity() instanceof ServerPlayer directPlayer ? directPlayer : null;
+
+        if (player == null || player.isCreative() || player.isSpectator()) return;
+
         Stamina stamina = getStamina(player);
-        if (stamina == null) return;
+        if (stamina == null || !stamina.isDepleted()) return;
 
-        CompoundTag data = player.getPersistentData();
-        int now = player.tickCount;
-        if (data.getInt(TAG_LAST_MELEE_DRAIN_TICK) == now) return;
-        data.putInt(TAG_LAST_MELEE_DRAIN_TICK, now);
-
-        if (stamina.isDepleted()) {
-            event.setNewDamage(0F);
-            return;
+        MeleeActionState actionState = MELEE_ACTIONS.get(player);
+        long paidUntil = actionState == null ? Long.MIN_VALUE : actionState.paidUntil;
+        if (player.level().getGameTime() > paidUntil) {
+            event.setNewDamage(0.0F);
         }
-
-        int combo = (player instanceof PlayerAttackProperties props) ? props.getComboCount() : 0;
-        int cost = Math.max(1, CalculateStaminaUtils.calculateMeleeStaminaCost(player, combo));
-
-        drain(stamina, cost);
-        addDelay(stamina, 40);
     }
+
+    private static final class MeleeActionState {
+        private long lastActionTick = Long.MIN_VALUE;
+        private int lastCombo = Integer.MIN_VALUE;
+        private long paidUntil = Long.MIN_VALUE;
+    }
+
     private static void addDelay(Stamina stamina, int ticks) {
-        if (stamina instanceof StaminaOverride ov) {
-            ov.addRegenDelay(ticks);
+        if (stamina instanceof StaminaOverride override) {
+            override.addRegenDelay(ticks);
         }
     }
 }

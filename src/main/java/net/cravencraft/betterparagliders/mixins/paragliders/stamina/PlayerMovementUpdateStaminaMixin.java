@@ -41,7 +41,9 @@ public abstract class PlayerMovementUpdateStaminaMixin {
                             || item instanceof CrossbowItem
                             || CalculateStaminaUtils.DATAPACK_RANGED_STAMINA_OVERRIDES.containsKey(key);
 
-            if (ranged && staminaDelta > 0.0D) {
+            if (ranged
+                    && CalculateStaminaUtils.calculateRangeStaminaPerSecond(p, key) > 0.0D
+                    && staminaDelta > 0.0D) {
                 staminaDelta = 0.0D;
             }
         }

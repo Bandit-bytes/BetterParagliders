@@ -8,7 +8,4 @@ public interface StaminaOverride {
     default void addRegenDelay(int ticks) {
         setRegenDelayTicks(Math.max(getRegenDelayTicks(), ticks));
     }
-
-    default int getTotalActionStaminaCost() { return 0; }
-    default void setTotalActionStaminaCost(int totalActionStaminaCost) {}
 }

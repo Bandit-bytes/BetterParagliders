@@ -1,5 +1,0 @@
-[
-  { "type": "ranged_weapon", "name": "minecraft:bow", "stamina_cost": 3 },
-  { "type": "ranged_weapon", "name": "minecraft:crossbow", "stamina_cost": 5 },
-  { "type": "shield", "name": "minecraft:shield", "stamina_cost": 10 }
-]

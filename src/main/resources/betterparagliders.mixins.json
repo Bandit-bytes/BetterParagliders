@@ -3,13 +3,11 @@
   "minVersion": "0.8",
   "package": "net.cravencraft.betterparagliders.mixins",
   "compatibilityLevel": "JAVA_21",
-  "refmap": "betterparagliders.refmap.json",
   "mixins": [
     "paragliders.accessors.PlayerMovementAccessor",
     "paragliders.accessors.PlayerMovementStaminaAccessMixin",
     "paragliders.stamina.BotWStaminaMixin",
-    "paragliders.stamina.PlayerMovementUpdateStaminaMixin",
-    "paragliders.stamina.ServerBotWStaminaMixin"
+    "paragliders.stamina.PlayerMovementUpdateStaminaMixin"
   ],
   "client": [
     "paragliders.capabilities.ClientPlayerMovementMixin",
